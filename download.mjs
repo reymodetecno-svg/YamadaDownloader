@@ -123,4 +123,4 @@ const mediaIndex = Number.isInteger(body?.mediaIndex)
   }
 };
 
-export const config = { path: "download" };
+export const config = { path: "download.mjs" };
