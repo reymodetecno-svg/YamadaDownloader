@@ -1,6 +1,6 @@
 [build]
   publish = "."
-  functions = "download.mjs"
+  functions = "download"
 
 [functions]
   node_bundler = "esbuild"
