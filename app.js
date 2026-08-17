@@ -1,8 +1,15 @@
+// Daftarkan Service Worker supaya web bisa diinstall sebagai aplikasi (PWA)
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  });
+}
+
 const CONFIG = {
   whatsappChannel: "https://whatsapp.com/channel/0029Vb87O3oF6smw9uLgOD0U",
   customerService: "https://wa.me/6283869485575",
-  // Netlify Function akan membaca DOWNLOADER_API_URL dari environment.
-  downloadEndpoint: "/.netlify/functions/download"
+  // Vercel Function akan membaca DOWNLOADER_API_URL dari environment.
+  downloadEndpoint: "/api/download"
 };
 
 const tools = {
@@ -104,12 +111,12 @@ async function downloadVideo(){
     box.innerHTML =
       `<strong>Download belum dapat diproses.</strong><br>` +
       `${escapeHtml(error.message)}<br>` +
-      `<small>Pastikan DOWNLOADER_API_URL sudah diisi di Netlify dan API downloader kamu aktif.</small>`;
+      `<small>Pastikan DOWNLOADER_API_URL sudah diisi di Vercel dan API downloader kamu aktif.</small>`;
   }finally{
     btn.disabled = false;
     btn.innerHTML = "<span>↓</span> Download Video";
   }
-}  // <-- TAMBAHKAN INI
+}
 
 function renderDownloadResult(data){
   const box = $("#resultBox");
@@ -190,20 +197,29 @@ function renderDownloadResult(data){
   });
 }
 
-async function downloadSelectedMedia(originalUrl, mediaIndex, title, extension, button){
+async function downloadSelectedMedia(
+  originalUrl,
+  mediaIndex,
+  title,
+  extension,
+  button
+){
   if(!originalUrl){
     showToast("Link video tidak ditemukan.");
     return;
   }
 
   const originalLabel = button.innerHTML;
+
   button.disabled = true;
   button.innerHTML = "<span>⏳ Memproses...</span>";
 
   try{
     const response = await fetch(CONFIG.downloadEndpoint, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json"
+      },
       body: JSON.stringify({
         url: originalUrl,
         download: true,
@@ -211,31 +227,37 @@ async function downloadSelectedMedia(originalUrl, mediaIndex, title, extension, 
       })
     });
 
+    const data = await response.json().catch(() => ({}));
+
     if(!response.ok){
-      const errData = await response.json().catch(() => ({}));
-      throw new Error(errData.error || `HTTP ${response.status}`);
+      throw new Error(
+        data.error || `HTTP ${response.status}`
+      );
     }
 
-    const blob = await response.blob();
-    if(!blob || blob.size === 0) throw new Error("File kosong.");
+    if(!data.url){
+      throw new Error("URL download tidak diberikan API.");
+    }
 
-    const blobUrl = URL.createObjectURL(blob);
-    const filename = `${String(title).replace(/[<>:"/\\|?*]/g, "").trim()}.${extension}`;
-
+    /*
+     * PENTING:
+     * Jangan fetch URL googlevideo.com dari Vercel.
+     * Browser langsung membuka URL media.
+     */
     const link = document.createElement("a");
-    link.href = blobUrl;
-    link.download = filename;
-    link.style.display = "none";
+
+    link.href = data.url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
 
     document.body.appendChild(link);
     link.click();
     link.remove();
 
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
-
-    showToast("✔ Video berhasil didownload!");
+    showToast("✔ Download dimulai!");
   }catch(error){
     console.error("Download error:", error);
+
     showToast(`Gagal: ${error.message}`);
   }finally{
     button.disabled = false;
@@ -265,74 +287,244 @@ function initPWA(){
   });
 }
 
+function initDeviceStatus(){
+  const typeEl = $("#deviceType");
+  const statusEl = $("#deviceBatteryStatus");
+
+  if (!typeEl) return;
+
+  // Deteksi jenis perangkat dari user agent
+  const ua = navigator.userAgent || "";
+  let deviceLabel = "Desktop";
+  if (/iPad|Tablet/i.test(ua) || (/Android/i.test(ua) && !/Mobile/i.test(ua))) {
+    deviceLabel = "Tablet";
+  } else if (/Mobi|Android|iPhone/i.test(ua)) {
+    deviceLabel = "Handphone";
+  }
+  typeEl.textContent = deviceLabel;
+
+  function updateBattery(battery){
+    const percent = Math.round(battery.level * 100);
+
+    if (statusEl) {
+      statusEl.classList.remove("low", "medium");
+      if (percent <= 20) statusEl.classList.add("low");
+      else if (percent <= 50) statusEl.classList.add("medium");
+
+      statusEl.textContent = battery.charging
+        ? `${percent}% • Mengisi daya`
+        : `${percent}% • Tidak mengisi`;
+    }
+  }
+
+  if (navigator.getBattery) {
+    navigator.getBattery()
+      .then(battery => {
+        updateBattery(battery);
+        battery.addEventListener("levelchange", () => updateBattery(battery));
+        battery.addEventListener("chargingchange", () => updateBattery(battery));
+      })
+      .catch(() => {
+        if (statusEl) statusEl.textContent = "Tidak tersedia";
+      });
+  } else {
+    if (statusEl) statusEl.textContent = "Tidak didukung";
+  }
+}
+
 document.addEventListener("DOMContentLoaded", () => {
-  setTimeout(() => $("#splash").classList.add("hide"), 1350);
+
+  // =========================
+  // WHATSAPP NOTICE
+  // =========================
 
   const notice = $("#waNotice");
-  $("#waLink").href = CONFIG.whatsappChannel;
-  $("#csLink").href = CONFIG.customerService;
-  setTimeout(() => notice.classList.add("show"), 1550);
-  setTimeout(() => notice.classList.remove("show"), 6550);
-  $("#closeNotice").addEventListener("click", () => notice.classList.remove("show"));
+  const waLink = $("#waLink");
+  const csLink = $("#csLink");
 
-  $$(".nav-item, [data-page]").forEach(el => {
-    el.addEventListener("click", e => {
-      const page = el.dataset.page;
-      if(page) setPage(page);
+  if (waLink) {
+    waLink.href = CONFIG.whatsappChannel;
+  }
+
+  if (csLink) {
+    csLink.href = CONFIG.customerService;
+  }
+
+  if (notice) {
+    setTimeout(() => notice.classList.add("show"), 1000);
+    setTimeout(() => notice.classList.remove("show"), 6000);
+  }
+
+  const closeNotice = $("#closeNotice");
+
+  if (closeNotice) {
+    closeNotice.addEventListener("click", () => {
+      notice?.classList.remove("show");
     });
+  }
+
+
+  // =========================
+  // NAVIGASI
+  // =========================
+
+  document.querySelectorAll(".nav-item").forEach(button => {
+
+    button.addEventListener("click", () => {
+
+      const page = button.dataset.page;
+
+      if (!page) return;
+
+      setPage(page);
+
+    });
+
   });
 
-  $$(".tool-card").forEach(card => card.addEventListener("click", () => openTool(card.dataset.tool)));
-  $("#pasteBtn").addEventListener("click", pasteUrl);
-  $("#downloadBtn").addEventListener("click", downloadVideo);
-  $("#videoUrl").addEventListener("keydown", e => { if(e.key === "Enter") downloadVideo(); });
 
-  if("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(()=>{});
-  initPWA();
-});
+  // =========================
+  // TOOL DOWNLOADER
+  // =========================
 
-// =========================
-// MODE GELAP / MODE CERAH
-// =========================
+  document.querySelectorAll(".tool-card").forEach(card => {
 
-const themeToggle = document.getElementById("themeToggle");
-const themeIcon = document.getElementById("themeIcon");
+    card.addEventListener("click", () => {
 
-// Ambil tema yang tersimpan
-const savedTheme = localStorage.getItem("theme");
+      const tool = card.dataset.tool;
 
-if (savedTheme === "dark") {
-  document.body.classList.add("dark-mode");
+      if (!tool) return;
 
-  if (themeIcon) {
-    themeIcon.textContent = "🌙";
+      openTool(tool);
+
+    });
+
+  });
+
+
+  // =========================
+  // BACK BUTTON
+  // =========================
+
+  document.querySelectorAll("[data-page]").forEach(button => {
+
+    button.addEventListener("click", () => {
+
+      const page = button.dataset.page;
+
+      if (page) {
+        setPage(page);
+      }
+
+    });
+
+  });
+
+
+  // =========================
+  // PASTE
+  // =========================
+
+  const pasteBtn = $("#pasteBtn");
+
+  if (pasteBtn) {
+    pasteBtn.addEventListener("click", pasteUrl);
   }
-} else {
-  document.body.classList.remove("dark-mode");
 
-  if (themeIcon) {
-    themeIcon.textContent = "☀️";
+
+  // =========================
+  // DOWNLOAD
+  // =========================
+
+  const downloadBtn = $("#downloadBtn");
+
+  if (downloadBtn) {
+    downloadBtn.addEventListener("click", downloadVideo);
   }
-}
 
-// Tombol ganti tema
-if (themeToggle) {
-  themeToggle.addEventListener("click", function () {
 
-    document.body.classList.toggle("dark-mode");
+  const videoUrl = $("#videoUrl");
 
-    const darkMode =
-      document.body.classList.contains("dark-mode");
+  if (videoUrl) {
 
-    localStorage.setItem(
-      "theme",
-      darkMode ? "dark" : "light"
-    );
+    videoUrl.addEventListener("keydown", event => {
+
+      if (event.key === "Enter") {
+        downloadVideo();
+      }
+
+    });
+
+  }
+
+
+  // =========================
+  // THEME
+  // =========================
+
+  const themeToggle = $("#themeToggle");
+  const themeIcon = $("#themeIcon");
+
+  let savedTheme = null;
+
+  try {
+    savedTheme = localStorage.getItem("theme");
+  } catch {}
+
+  if (savedTheme === "dark") {
+
+    document.body.classList.add("dark-mode");
 
     if (themeIcon) {
-      themeIcon.textContent =
-        darkMode ? "🌙" : "☀️";
+      themeIcon.textContent = "🌙";
     }
 
-  });
-}
+  } else {
+
+    document.body.classList.remove("dark-mode");
+
+    if (themeIcon) {
+      themeIcon.textContent = "☀️";
+    }
+
+  }
+
+
+  if (themeToggle) {
+
+    themeToggle.addEventListener("click", () => {
+
+      document.body.classList.toggle("dark-mode");
+
+      const dark = document.body.classList.contains("dark-mode");
+
+      try {
+        localStorage.setItem(
+          "theme",
+          dark ? "dark" : "light"
+        );
+      } catch {}
+
+      if (themeIcon) {
+        themeIcon.textContent = dark ? "🌙" : "☀️";
+      }
+
+    });
+
+  }
+
+
+  // =========================
+  // DEVICE STATUS
+  // =========================
+
+  initDeviceStatus();
+
+
+  // =========================
+  // PWA
+  // =========================
+
+  initPWA();
+
+});
